@@ -159,6 +159,10 @@ Please configure in `cluster.yml` all necessary credentials:
 [root@server ~]# ansible-playbook ./ansible/setup.yml
 ```
 
+## Add a worker/compute node
+```
+root@homer:~/hetzner-ocp4 $ ./ansible/add-node.yml
+```
 # Additional documentation
 
 * [How to install and manage more than one OpenShift Cluster with  hetzner-ocp4](docs/multi-cluster-guide.md)

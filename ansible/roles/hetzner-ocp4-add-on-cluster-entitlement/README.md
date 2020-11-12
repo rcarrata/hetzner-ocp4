@@ -1,6 +1,6 @@
 # How to use hetzner-ocp4-add-on-cluster-entitlement
 
-Add to cluster.yml
+Add to cluster-addons.yml
 ```
 post_install_add_ons:
   - name: cluster-entitlement

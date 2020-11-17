@@ -1,4 +1,6 @@
 ---
+- name: Include vars of stuff.yaml into the 'stuff' variable (2.2).
+  include_vars: "{{ playbook_dir }}/../add-ons.yml"
 
 - name: "Set kubeconfig"
   set_fact:
@@ -6,10 +8,6 @@
 
 - name: "Handle post_install_add_ons (include_role)"
   include_role:
-    name: "hetzner-ocp4-add-on-{{ item.name }}"
+    name: "{{ item.name }}"
     tasks_from: "{{ item.tasks_from | default('main.yml') }}"
   with_items: "{{ post_install_add_ons | default ([]) }}"
-
-# - name: "Handle post_install_add_ons (include)"
-#   include: post-install-add-on-include.yml add_on={{item}}
-#   with_items: "{{ post_install_add_ons | default ([]) }}"

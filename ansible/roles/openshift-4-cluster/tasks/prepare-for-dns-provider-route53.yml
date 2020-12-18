@@ -1,0 +1,14 @@
+---
+- name: Install boto in CentOS 8 via pip
+  pip:
+    name:
+      - boto
+  when: ansible_distribution == "CentOS" and ansible_distribution_major_version == '8'
+
+- name: Install boto on RHEL 8 via dnf/yum
+  yum:
+    name:
+      - python3-boto
+    state: present
+  when: ansible_distribution == "CentOS" and ansible_distribution_major_version == '8'
+

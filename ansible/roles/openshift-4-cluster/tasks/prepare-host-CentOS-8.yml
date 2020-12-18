@@ -17,6 +17,7 @@
       # ansible route53 need  python-boto
       - boto
       # ansible k8s need python2-openshift
+      - kubernetes==11.0.0
       - openshift
 
 - name: Enable & Start firewalld

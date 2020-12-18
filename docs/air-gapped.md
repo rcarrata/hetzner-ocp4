@@ -10,35 +10,248 @@ network_forward_mode: "route"
 ```
 into `cluster.yml` and setup the network:
 ```
-./ansible/02-create-cluster.yml --tags network
+./ansible/02-create-cluster.yml --tags network,download-openshift-artifacts
 ```
+## Setup enviroment variables
+
+```bash
+export OCP_RELEASE=$(oc version -o json  --client | jq -r '.releaseClientVersion')
+export LOCAL_REGISTRY='host.compute.local:5000'
+export LOCAL_REPOSITORY='ocp4/openshift4'
+export PRODUCT_REPO='openshift-release-dev'
+export LOCAL_SECRET_JSON='/root/hetzner-ocp4/pullsecret.json'
+export RELEASE_NAME="ocp-release"
+export ARCHITECTURE=x86_64
+# export REMOVABLE_MEDIA_PATH=<path>
+
+```
+
 
 ## Setup mirror registry on kvm-host
 
 Create host entry for image registry mirror:
 ```
-echo 192.168.50.1 host.compute.local >> /etc/hosts
+echo 192.168.50.1 ${LOCAL_REGISTRY%:*} >> /etc/hosts
 ```
+
 
 Install & prepare image registry
 ```
 yum -y install podman httpd-tools
 
 mkdir -p /var/lib/libvirt/images/mirror-registry/{auth,certs,data}
+```
 
-openssl req -newkey rsa:4096 -nodes -sha256 \
-  -keyout /var/lib/libvirt/images/mirror-registry/certs/domain.key \
-  -x509 -days 365 -subj "/CN=host.compute.local" \
-  -out /var/lib/libvirt/images/mirror-registry/certs/domain.crt
+Create openssl.root-ca.conf
+```
+cat > /var/lib/libvirt/images/mirror-registry/certs/openssl.root-ca.conf <<EOF
+# OpenSSL root CA configuration file.
 
-cp -v /var/lib/libvirt/images/mirror-registry/certs/domain.crt /etc/pki/ca-trust/source/anchors/
+[ req ]
+# Options for the req tool (man req).
+default_bits        = 2048
+distinguished_name  = req_distinguished_name
+string_mask         = utf8only
+
+# SHA-1 is deprecated, so use SHA-2 instead.
+default_md          = sha256
+
+# Extension to add when the -x509 option is used.
+x509_extensions     = v3_ca
+req_extensions      = v3_req
+
+[ v3_req ]
+# Extensions to add to a certificate request
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = rootca.example.com
+# DNS.2 = *.pass.example.com
+# DNS.3 = ...
+# DNS.4 = ...
+
+
+[ req_distinguished_name ]
+# See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
+countryName                     = Country Name (2 letter code)
+stateOrProvinceName             = State or Province Name
+localityName                    = Locality Name
+0.organizationName              = Organization Name
+organizationalUnitName          = Organizational Unit Name
+commonName                      = Common Name
+emailAddress                    = Email Address
+
+# Optionally, specify some defaults.
+countryName_default             = DE
+stateOrProvinceName_default     = Bavaria
+localityName_default            = Munich
+0.organizationName_default      = My Private Root CA
+organizationalUnitName_default  = My Private Root CA
+emailAddress_default            = email@domain.tld
+commonName_default              = rootca.example.com
+
+[ v3_ca ]
+# Extensions for a typical CA (man x509v3_config).
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ v3_intermediate_ca ]
+# Extensions for a typical intermediate CA (man x509v3_config).
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ server_cert ]
+# Extensions for server certificates (man x509v3_config).
+basicConstraints = CA:FALSE
+nsCertType = server
+nsComment = "OpenSSL Generated Server Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+
+[ crl_ext ]
+# Extension for CRLs (man x509v3_config).
+authorityKeyIdentifier=keyid:always
+EOF
+```
+
+Create openssl.certificate.conf
+```
+cat > /var/lib/libvirt/images/mirror-registry/certs/openssl.certificate.conf <<EOF
+# OpenSSL root CA configuration file.
+
+[ req ]
+# Options for the req tool (man req).
+default_bits        = 2048
+distinguished_name  = req_distinguished_name
+string_mask         = utf8only
+
+# SHA-1 is deprecated, so use SHA-2 instead.
+default_md          = sha256
+
+# Extension to add when the -x509 option is used.
+x509_extensions     = v3_ca
+req_extensions      = v3_req
+
+[ v3_req ]
+# Extensions to add to a certificate request
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 =  ${LOCAL_REGISTRY%:*}
+
+
+[ req_distinguished_name ]
+# See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
+countryName                     = Country Name (2 letter code)
+stateOrProvinceName             = State or Province Name
+localityName                    = Locality Name
+0.organizationName              = Organization Name
+organizationalUnitName          = Organizational Unit Name
+commonName                      = Common Name
+emailAddress                    = Email Address
+
+# Optionally, specify some defaults.
+countryName_default             = DE
+stateOrProvinceName_default     = Bavaria
+localityName_default            = Munich
+0.organizationName_default      = Private
+organizationalUnitName_default  = Private
+emailAddress_default            = email@domain.tld
+commonName_default              =  ${LOCAL_REGISTRY%:*}
+
+[ v3_ca ]
+# Extensions for a typical CA (man x509v3_config).
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ v3_intermediate_ca ]
+# Extensions for a typical intermediate CA (man x509v3_config).
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ server_cert ]
+# Extensions for server certificates (man x509v3_config).
+basicConstraints = CA:FALSE
+nsCertType = server
+nsComment = "OpenSSL Generated Server Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+
+[ crl_ext ]
+# Extension for CRLs (man x509v3_config).
+authorityKeyIdentifier=keyid:always
+EOF
+```
+
+Generate the root
+```
+openssl genrsa -aes256 -passout pass:r3dh4t\!1 -out /var/lib/libvirt/images/mirror-registry/certs/ca.key 2048
+
+openssl req \
+  -passin pass:r3dh4t\!1 \
+  -config /var/lib/libvirt/images/mirror-registry/certs/openssl.root-ca.conf \
+  -new -x509 -days 7300 \
+  -key /var/lib/libvirt/images/mirror-registry/certs/ca.key \
+  -sha256 \
+  -extensions v3_ca \
+  -out /var/lib/libvirt/images/mirror-registry/certs/ca.crt
+```
+
+
+Generate the key &  certificate signing request
+
+```bash
+openssl genrsa -out /var/lib/libvirt/images/mirror-registry/certs/domain.key 2048
+
+openssl req -config /var/lib/libvirt/images/mirror-registry/certs/openssl.certificate.conf \
+  -sha256 -new \
+  -key /var/lib/libvirt/images/mirror-registry/certs/domain.key \
+  -out /var/lib/libvirt/images/mirror-registry/certs/domain.csr
+```
+
+Sign the request with your root key
+```bash
+openssl x509 -sha256 -req \
+  -passin pass:r3dh4t\!1 \
+  -in /var/lib/libvirt/images/mirror-registry/certs/domain.csr \
+  -CA /var/lib/libvirt/images/mirror-registry/certs/ca.crt \
+  -CAkey /var/lib/libvirt/images/mirror-registry/certs/ca.key \
+  -CAcreateserial \
+  -out /var/lib/libvirt/images/mirror-registry/certs/domain.crt \
+  -days 7300 \
+  -extfile /var/lib/libvirt/images/mirror-registry/certs/openssl.certificate.conf \
+  -extensions v3_req
+```
+
+Install rootca
+```
+cp -v /var/lib/libvirt/images/mirror-registry/certs/ca.crt /etc/pki/ca-trust/source/anchors/
 update-ca-trust
+```
 
+Configure htpasswd
+```
 htpasswd -bBc /var/lib/libvirt/images/mirror-registry/auth/htpasswd admin r3dh4t\!1
 ```
 
 Create internal registry service: `/etc/systemd/system/mirror-registry.service`
-**Change REGISTRY_HTTP_ADDR in case you use different network**
+
 ```
 cat - > /etc/systemd/system/mirror-registry.service <<EOF
 [Unit]
@@ -55,7 +268,7 @@ ExecStart=/usr/bin/podman run --name mirror-registry --net host \
   -v /var/lib/libvirt/images/mirror-registry/data:/var/lib/registry:z \
   -v /var/lib/libvirt/images/mirror-registry/auth:/auth:z \
   -e "REGISTRY_AUTH=htpasswd" \
-  -e "REGISTRY_HTTP_ADDR=192.168.50.1:5000" \
+  -e "REGISTRY_HTTP_ADDR=${LOCAL_REGISTRY}" \
   -e "REGISTRY_AUTH_HTPASSWD_REALM=registry-realm" \
   -e "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd" \
   -e "REGISTRY_COMPATIBILITY_SCHEMA1_ENABLED=TRUE" \
@@ -78,8 +291,7 @@ EOF
 
 Enable and start mirror registry
 ```
-systemctl enable mirror-registry.service
-systemctl start mirror-registry.service
+systemctl enable --now mirror-registry.service
 systemctl status mirror-registry.service
 ```
 
@@ -91,15 +303,71 @@ firewall-cmd --reload
 
 Check registry
 ```
-$ curl -u admin:r3dh4t\!1 https://host.compute.local:5000/v2/_catalog
+$ curl -u admin:r3dh4t\!1 https://${LOCAL_REGISTRY}/v2/_catalog
 {"repositories":[]}
 ```
 
 Create mirror registry pullsecret
 ```
-podman login --authfile mirror-registry-pullsecret.json host.compute.local:5000
+podman login --authfile mirror-registry-pullsecret.json ${LOCAL_REGISTRY}
 ```
 
+
+## Optional: GUI
+```
+cat >/var/lib/libvirt/images/mirror-registry/gui-nginx.conf <<EOF
+server {
+  listen 8080;
+  root /usr/share/nginx/html;
+
+  location /v2 {
+      # Do not allow connections from docker 1.5 and earlier
+      # docker pre-1.6.0 did not properly set the user agent on ping, catch "Go *" user agents
+      if (\$http_user_agent ~ "^(docker\/1\.(3|4|5(.[0-9]-dev))|Go ).*$" ) {
+          return 404;
+      }
+      proxy_pass https://${LOCAL_REGISTRY};
+      proxy_ssl_verify off;
+  }
+}
+EOF
+
+cat - > /etc/systemd/system/mirror-registry-ui.service <<EOF
+[Unit]
+Description=Mirror registry ui
+After=network.target
+
+[Service]
+Type=simple
+TimeoutStartSec=5m
+
+ExecStartPre=-/usr/bin/podman rm "mirror-registry-ui"
+ExecStartPre=/usr/bin/podman pull quay.io/redhat-emea-ssa-team/registry:2
+ExecStart=/usr/bin/podman run  --name mirror-registry-ui --net host  \
+  -e URL=http://$(curl --ipv4 -s ifconfig.co):8080/ \
+  -e SHOW_CONTENT_DIGEST=true \
+  -e DELETE_IMAGES=true \
+  -e REGISTRY_TITLE=${LOCAL_REGISTRY} \
+  -v /var/lib/libvirt/images/mirror-registry/gui-nginx.conf:/etc/nginx/conf.d/default.conf:z \
+  docker.io/joxit/docker-registry-ui:static
+
+ExecReload=-/usr/bin/podman stop "mirror-registry-ui"
+ExecReload=-/usr/bin/podman rm "mirror-registry-ui"
+ExecStop=-/usr/bin/podman stop "mirror-registry-ui"
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable --now mirror-registry-ui.service
+systemctl status mirror-registry-ui.service
+
+firewall-cmd --zone=public --permanent --add-port=8080/tcp
+firewall-cmd --reload
+
+```
 
 ## Download Red Hat pull secret
 
@@ -109,24 +377,11 @@ Download Red Hat pull secret and store it in `redhat-pullsecret.json`
 
 Merge  mirror-registry-pullsecret.json & redhat-pullsecret.json
 ```
-jq -s '{"auths": ( .[0].auths + .[1].auths ) }' mirror-registry-pullsecret.json redhat-pullsecret.json > pullsecret.json
-```
-
-Install oc client
-```
-./ansible/02-create-cluster.yml --tags download-openshift-artifacts
+jq -s '{"auths": ( .[0].auths + .[1].auths ) }' mirror-registry-pullsecret.json redhat-pullsecret.json > ${LOCAL_SECRET_JSON}
 ```
 
 Mirror images:
 ```
-export OCP_RELEASE=$(oc version -o json  --client | jq -r '.releaseClientVersion')
-export LOCAL_REGISTRY='host.compute.local:5000'
-export LOCAL_REPOSITORY='ocp4/openshift4'
-export PRODUCT_REPO='openshift-release-dev'
-export LOCAL_SECRET_JSON='pullsecret.json'
-export RELEASE_NAME="ocp-release"
-export ARCHITECTURE=x86_64
-# export REMOVABLE_MEDIA_PATH=<path>
 
 # Try run:
 
@@ -198,31 +453,9 @@ Add install_config_additionalTrustBundle and install_config_imageContentSources 
 # Path to extracted openshift-install command
 openshift_install_command: "/root/hetzner-ocp4/openshift-install"
 install_config_additionalTrustBundle: |
-  # Content of /var/lib/libvirt/images/mirror-registry/certs/domain.crt
+  # Content of /var/lib/libvirt/images/mirror-registry/certs/ca.crt
   -----BEGIN CERTIFICATE-----
-  MIIEODCCAyCgAwIBAgIJAJhg5kZKGIs4MA0GCSqGSIb3DQEBCwUAMIGoMQswCQYD
-  VQQGEwJERTEQMA4GA1UECAwHQmF2YXJpYTEPMA0GA1UEBwwGTXVuaWNoMRswGQYD
-  VQQKDBJNeSBQcml2YXRlIFJvb3QgQ0ExGzAZBgNVBAsMEk15IFByaXZhdGUgUm9v
-  dCBDQTEbMBkGA1UEAwwScm9vdGNhLmV4YW1wbGUuY29tMR8wHQYJKoZIhvcNAQkB
-  FhBlbWFpbEBkb21haW4udGxkMB4XDTE5MTEyMDA5NDgzMloXDTM5MTExNTA5NDgz
-  MlowgagxCzAJBgNVBAYTAkRFMRAwDgYDVQQIDAdCYXZhcmlhMQ8wDQYDVQQHDAZN
-  dW5pY2gxGzAZBgNVBAoMEk15IFByaXZhdGUgUm9vdCBDQTEbMBkGA1UECwwSTXkg
-  UHJpdmF0ZSBSb290IENBMRswGQYDVQQDDBJyb290Y2EuZXhhbXBsZS5jb20xHzAd
-  BgkqhkiG9w0BCQEWEGVtYWlsQGRvbWFpbi50bGQwggEiMA0GCSqGSIb3DQEBAQUA
-  A4IBDwAwggEKAoIBAQDaezXIWOyvKZSdeWRw0kurgyXattX5TTOyRE81h8C1+oX7
-  Dcj0TPZ+kHrC5IrDgQkBLIJZLNe5zNWy+Jn+HJYwPN5c7nWmynW3ogNo8wvjviPk
-  wRIjGbgTrHwViZV+05l09VM1I2dOfn0s0yzIlp8pw9COU2sJecFX2SDtQuIRHeWy
-  +MpvtyAIqwublkGx07K430iqOt6mOOTGz7UDRLYADNFt+hPfuLHnodfMDZWKtNAG
-  1iLJvlsgTQif6dY+4WoufPjZLSjQ93BSuafQf7H+D6UeaETAp187WtpRTf7WgH3h
-  ipcnOXEcZmUeGppQxeI20qXbGjRg8e3/lq8A2Aj/AgMBAAGjYzBhMB0GA1UdDgQW
-  BBQeCEiY4wVw6PcvjFHckxiokOSDazAfBgNVHSMEGDAWgBQeCEiY4wVw6PcvjFHc
-  kxiokOSDazAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjANBgkqhkiG
-  9w0BAQsFAAOCAQEAU2twrBbWKBODrdoyRNKWoVonDtNfGPjs+Ipz53FolZKPeJHA
-  K0Sw/INT+U7/+p/S5lnYUpeRKlNVAeVSFbIvKHoymQF/oqZlRguHqZmmKQw2CMZK
-  Gr34bhcbWD/Zn0EEYe9Dd4Lp2sDcvAmt4vPfxyNqNbCN3e1r52bIOvsT0kV5i4cf
-  FducaYqL7UFfSUYsmcj0IbvWzgsHpLDWdnNqdMmcQ6GUBupqPAuP5BNxoEBQ/cVP
-  OKKLYSijjJN0zXXF8irgvWxLHPU0N6u5ozd3n4FHTW4kLDjSTNTMuypk4jUqQhrJ
-  8rnXNwLANMzPzZjnB+m+ruhITAppHIpdGYFSEw==
+  ....
   -----END CERTIFICATE-----
 install_config_imageContentSources:
 - mirrors:
